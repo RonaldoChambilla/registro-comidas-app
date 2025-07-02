@@ -1,29 +1,48 @@
-import type { LugarEntrega, TipoComida } from '../types';
+import type { LugarEntrega, TipoComida, GetProductoAlimentosResponse, GetLugarDestinoResponse } from '../types';
 
-// Datos simulados para los lugares de entrega
 export const getLugaresEntrega = async (): Promise<LugarEntrega[]> => {
-  // Simula una llamada a la API
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      resolve([
-        { id: 1, nombre: 'Mina' },
-        { id: 2, nombre: 'Almacen' },
-        { id: 3, nombre: 'Hotel' },
-      ]);
-    }, 100); // Pequeño retardo para simular una red
-  });
+  try {
+    const response = await fetch('http://localhost:3000/lugar-destino');
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const data: GetLugarDestinoResponse[] = await response.json();
+    // Mapear la respuesta del backend a nuestra interfaz LugarEntrega
+    return data.map(item => ({
+      id: item.idLugarDestino,
+      nombre: item.nombre.charAt(0).toUpperCase() + item.nombre.slice(1).toLowerCase(), // Capitalizar primera letra
+    }));
+  } catch (error) {
+    console.error("Error al obtener lugares de entrega:", error);
+    // Fallback a datos simulados si la llamada API falla
+    return [
+      { id: 1, nombre: 'Mina' },
+      { id: 2, nombre: 'Hotel' },
+      { id: 3, nombre: 'Almacen' },
+    ];
+  }
 };
 
-// Datos simulados para los tipos de comida (Normal, Dieta, Frio)
 export const getTiposComida = async (): Promise<TipoComida[]> => {
-  // Simula una llamada a la API
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      resolve([
-        { id: 1, nombre: 'Normal' },
-        { id: 2, nombre: 'Dieta' },
-        { id: 3, nombre: 'Frio' },
-      ]);
-    }, 100); // Pequeño retardo para simular una red
-  });
+  try {
+    const response = await fetch('http://localhost:3000/Producto');
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const data: GetProductoAlimentosResponse[] = await response.json();
+    // Mapear la respuesta del backend a nuestra interfaz TipoComida
+    return data.map(item => ({
+      id: item.IdProducto,
+      nombre: item.NombreProducto.charAt(0).toUpperCase() + item.NombreProducto.slice(1).toLowerCase(), // Capitalizar primera letra
+    }));
+  } catch (error) {
+    console.error("Error al obtener tipos de comida:", error);
+    // Fallback a datos simulados si la llamada API falla
+    return [
+      { id: 1, nombre: 'Normal' },
+      { id: 2, nombre: 'Frio' },
+      { id: 3, nombre: 'Dieta' },
+      { id: 4, nombre: 'Especial' },
+    ];
+  }
 };

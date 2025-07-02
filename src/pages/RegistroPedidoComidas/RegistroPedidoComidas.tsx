@@ -1,536 +1,677 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  Container,
+  Form,
+  Button,
+  Row,
+  Col,
+  Alert,
+  ListGroup,
+  Modal,
+} from 'react-bootstrap';
+import DatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
+import { v4 as uuidv4 } from 'uuid';
+import { format, parseISO, isValid, addDays } from 'date-fns';
+import { es } from 'date-fns/locale';
+
+// Importaciones de servicios y tipos actualizados
 import { validateDni } from '../../services/employeeApi';
 import { getLugaresEntrega, getTiposComida } from '../../services/dataService';
-import { getDatesInRange, formatDateToYYYYMMDD, parseDateYYYYMMDD } from '../../utils/dateUtils'; // Importar utilidades de fecha
-import type { EmployeeValidationResponse, LugarEntrega, TipoComida, Pedido, ComidaSeleccionada, ConflictingPedidoSummary, ReplaceConfirmationModalProps } from '../../types'; // Importar nuevas interfaces
-import PedidosModal from '../../components/common/PedidosModal';
+import {
+  registerOrder,
+  updateOrderStatus,
+  getWorkerOrders,
+  patchOrderReplacement,
+} from '../../services/orderService';
+import type {
+  Pedido,
+  TipoComida,
+  LugarEntrega,
+  ComidaSeleccionada,
+  EmployeeValidationResponse,
+  RegisterOrderRequest,
+  RegisterOrderConflictResponse,
+  ConflictingPedidoSummary,
+} from '../../types';
 import ReplaceConfirmationModal from '../../components/common/ReplaceConfirmationModal';
-// Importa el nuevo modal de confirmación de reemplazo, que crearemos a continuación
-// import ReplaceConfirmationModal from '../../components/common/ReplaceConfirmationModal';
-
 
 const RegistroPedidoComidas: React.FC = () => {
-  const [dni, setDni] = useState<string>('');
-  const [nombres, setNombres] = useState<string>('');
-  const [dniValidated, setDniValidated] = useState<boolean>(false);
-  const [dniError, setDniError] = useState<string | null>(null);
+  const [dni, setDni] = useState('');
+  const [nombres, setNombres] = useState('');
+  const [idTrabajador, setIdTrabajador] = useState<number | null>(null);
+  const [idCliente, setIdCliente] = useState<number | null>(null);
+  const [formDisabled, setFormDisabled] = useState(true);
+  const [fechaIngreso, setFechaIngreso] = useState<Date | null>(null);
+  const [fechaSalida, setFechaSalida] = useState<Date | null>(null);
 
-  const [fechaIngreso, setFechaIngreso] = useState<string>('');
-  const [fechaSalida, setFechaSalida] = useState<string>('');
+  const [desayunoSeleccionado, setDesayunoSeleccionado] = useState<number | ''>('');
+  const [almuerzoSeleccionado, setAlmuerzoSeleccionado] = useState<number | ''>('');
+  const [cenaSeleccionada, setCenaSeleccionada] = useState<number | ''>('');
 
-  const [opcionesComida, setOpcionesComida] = useState<TipoComida[]>([]);
+  const [lugarEntregaDesayuno, setLugarEntregaDesayuno] = useState<number | ''>('');
+  const [lugarEntregaAlmuerzo, setLugarEntregaAlmuerzo] = useState<number | ''>('');
+  const [lugarEntregaCena, setLugarEntregaCena] = useState<number | ''>('');
+
   const [lugaresEntrega, setLugaresEntrega] = useState<LugarEntrega[]>([]);
+  const [tiposComida, setTiposComida] = useState<TipoComida[]>([]);
 
-  const [desayunoOpcion, setDesayunoOpcion] = useState<string>('');
-  const [desayunoLugar, setDesayunoLugar] = useState<string>('');
-  const [almuerzoOpcion, setAlmuerzoOpcion] = useState<string>('');
-  const [almuerzoLugar, setAlmuerzoLugar] = useState<string>('');
-  const [cenaOpcion, setCenaOpcion] = useState<string>('');
-  const [cenaLugar, setCenaLugar] = useState<string>('');
+  const [showAlert, setShowAlert] = useState(false);
+  const [alertVariant, setAlertVariant] = useState('danger');
+  const [alertMessage, setAlertMessage] = useState('');
 
-  // Estados para el modal de pedidos
-  const [showPedidosModal, setShowPedidosModal] = useState<boolean>(false);
   const [historialPedidos, setHistorialPedidos] = useState<Pedido[]>([]);
 
-  // Estados para el modal de confirmación de reemplazo
-  const [showReplaceConfirmationModal, setShowReplaceConfirmationModal] = useState<boolean>(false);
+  const [showReplaceModal, setShowReplaceModal] = useState(false);
   const [conflictingPedidosSummary, setConflictingPedidosSummary] = useState<ConflictingPedidoSummary[]>([]);
-  const [newOrderDatesToConfirm, setNewOrderDatesToConfirm] = useState<string[]>([]); // Fechas que se intentarían registrar
+  const [newOrderDatesForConflict, setNewOrderDatesForConflict] = useState<string[]>([]);
 
-  // Simular carga de datos para los selectores
-  useEffect(() => {
-    const loadData = async () => {
-      const loadedLugares = await getLugaresEntrega();
-      const loadedTiposComida = await getTiposComida();
-      setLugaresEntrega(loadedLugares);
-      setOpcionesComida(loadedTiposComida);
-    };
-    loadData();
+  const [isFormSubmitted, setIsFormSubmitted] = useState(false); // Nuevo estado para controlar la validación al enviar
+
+  // Función para mostrar alertas
+  const displayAlert = useCallback((message: string, variant: 'success' | 'danger') => {
+    setAlertMessage(message);
+    setAlertVariant(variant);
+    setShowAlert(true);
+    setTimeout(() => setShowAlert(false), 5000);
   }, []);
 
-  // Simular la carga de historial de pedidos al validar el DNI
+  // Cargar lugares de entrega y tipos de comida al inicio
   useEffect(() => {
-    if (dniValidated && dni) {
-      // Simulación: cargar pedidos asociados al DNI validado
-      const simulatedPedidosData: Pedido[] = [
-        // Pedido original de 2 días para Juan Perez
-        {
-          id: 'PED001-2025-07-01',
-          dni: '22334455',
-          nombres: 'kiwichon',
-          fechaServicio: '2025-07-01',
-          desayuno: { tipoId: 1, tipoNombre: 'Normal', lugarEntregaId: 1, lugarEntregaNombre: 'Mina' } as ComidaSeleccionada,
-          almuerzo: { tipoId: 2, tipoNombre: 'Dieta', lugarEntregaId: 2, lugarEntregaNombre: 'Almacen' } as ComidaSeleccionada,
-          cena: { tipoId: 3, tipoNombre: 'Frio', lugarEntregaId: 3, lugarEntregaNombre: 'Hotel' } as ComidaSeleccionada,
-          fechaHoraRegistro: '2025-06-25T10:00:00Z',
-          estadoPedido: 'Pendiente',
-          estadoRegistro: 'Activo',
-        } as Pedido,
-        {
-          id: 'PED001-2025-07-02',
-          dni: '22334455',
-          nombres: 'kiwichon',
-          fechaServicio: '2025-07-02',
-          desayuno: { tipoId: 1, tipoNombre: 'Normal', lugarEntregaId: 1, lugarEntregaNombre: 'Mina' } as ComidaSeleccionada,
-          almuerzo: { tipoId: 2, tipoNombre: 'Dieta', lugarEntregaId: 2, lugarEntregaNombre: 'Almacen' } as ComidaSeleccionada,
-          cena: { tipoId: 3, tipoNombre: 'Frio', lugarEntregaId: 3, lugarEntregaNombre: 'Hotel' } as ComidaSeleccionada,
-          fechaHoraRegistro: '2025-06-25T10:00:00Z',
-          estadoPedido: 'Pendiente',
-          estadoRegistro: 'Activo',
-        } as Pedido,
-        // Otro pedido de un día para Juan Perez (ya entregado)
-        {
-            id: 'PED002-2025-06-24',
-            dni: '22334455',
-            nombres: 'kiwichon',
-            fechaServicio: '2025-06-24',
-            desayuno: { tipoId: 1, tipoNombre: 'Normal', lugarEntregaId: 1, lugarEntregaNombre: 'Mina' } as ComidaSeleccionada,
-            fechaHoraRegistro: '2025-06-24T15:30:00Z',
-            estadoPedido: 'Entregado',
-            estadoRegistro: 'Activo',
-        } as Pedido,
-        // Pedido de un día para Maria Lopez (anulado)
-        {
-            id: 'PED003-2025-06-20',
-            dni: '87654321', // DNI diferente
-            nombres: 'Maria Lopez',
-            fechaServicio: '2025-06-20',
-            almuerzo: { tipoId: 1, tipoNombre: 'Normal', lugarEntregaId: 2, lugarEntregaNombre: 'Almacen' } as ComidaSeleccionada,
-            fechaHoraRegistro: '2025-06-20T08:45:00Z',
-            estadoPedido: 'Anulado',
-            estadoRegistro: 'Eliminado',
-        } as Pedido,
-        // Pedido que conflictua con el anterior para 12345678
-        {
-          id: 'PED004-2025-07-01',
-          dni: '22334455',
-          nombres: 'kiwichon',
-          fechaServicio: '2025-07-01',
-          desayuno: { tipoId: 1, tipoNombre: 'Normal', lugarEntregaId: 1, lugarEntregaNombre: 'Mina' } as ComidaSeleccionada,
-          fechaHoraRegistro: '2025-06-28T09:00:00Z',
-          estadoPedido: 'Pendiente',
-          estadoRegistro: 'Activo',
-        } as Pedido,
-      ].filter(pedido => pedido.dni === dni);
+    const loadData = async () => {
+      try {
+        const lugares = await getLugaresEntrega();
+        setLugaresEntrega(lugares);
+        const comidas = await getTiposComida();
+        setTiposComida(comidas);
+      } catch (error) {
+        console.error('Error al cargar datos iniciales:', error);
+        displayAlert('Error al cargar datos iniciales.', 'danger');
+      }
+    };
+    loadData();
+  }, [displayAlert]);
 
-      setHistorialPedidos(simulatedPedidosData);
-    } else {
-      setHistorialPedidos([]);
+  // Cargar historial de pedidos cuando idTrabajador esté disponible
+  const loadHistorialPedidos = useCallback(async () => {
+    if (idTrabajador && dni && nombres) {
+      try {
+        const pedidos = await getWorkerOrders(idTrabajador, dni, nombres);
+        // Ordenar pedidos por fecha de servicio descendente
+        pedidos.sort((a, b) => new Date(b.fechaServicio).getTime() - new Date(a.fechaServicio).getTime());
+        setHistorialPedidos(pedidos);
+      } catch (error) {
+        console.error('Error al cargar historial de pedidos:', error);
+        displayAlert('Error al cargar el historial de pedidos.', 'danger');
+      }
     }
-  }, [dniValidated, dni]);
+  }, [idTrabajador, dni, nombres, displayAlert]);
 
-  const handleDniChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value;
-    setDni(value);
-    setDniError(null);
-    setDniValidated(false);
-    setNombres('');
-  };
+  useEffect(() => {
+    loadHistorialPedidos();
+  }, [loadHistorialPedidos]); // Dependencia de loadHistorialPedidos
 
-  const handleValidateDni = async () => {
-    // ... (validaciones de DNI existentes)
-    setDniError(null);
-    const employeeData: EmployeeValidationResponse | null = await validateDni(dni);
+  // Manejar validación de DNI
+  const handleDniValidation = async () => {
+    setShowAlert(false);
+    if (!dni) {
+      displayAlert('Por favor, ingrese un número de DNI.', 'danger');
+      return;
+    }
+    if (dni.length !== 8 || !/^\d+$/.test(dni)) {
+      displayAlert('El DNI debe contener 8 dígitos numéricos.', 'danger');
+      return;
+    }
 
-    if (employeeData && employeeData.nombres) {
-      setNombres(employeeData.nombres);
-      setDniValidated(true);
-      // Aquí, si la API real devolviera los pedidos, los cargaríamos.
-      // Por ahora, el useEffect se encarga de la simulación.
-    } else {
-      setDniError("El DNI ingresado no corresponde a ningún empleado registrado.");
-      setDniValidated(false);
+    try {
+      const employeeData: EmployeeValidationResponse | null = await validateDni(dni);
+      if (employeeData) {
+        setNombres(employeeData.nombres);
+        setIdTrabajador(employeeData.idTrabajador);
+        setIdCliente(employeeData.idCliente);
+        setFormDisabled(false);
+        displayAlert('DNI validado con éxito. Puede continuar con el pedido.', 'success');
+      } else {
+        setNombres('');
+        setIdTrabajador(null);
+        setIdCliente(null);
+        setFormDisabled(true);
+        displayAlert('DNI no encontrado o inválido. Por favor, intente con otro DNI.', 'danger');
+      }
+    } catch (error) {
+      console.error('Error en la validación del DNI:', error);
+      displayAlert('Ocurrió un error al validar el DNI. Intente de nuevo más tarde.', 'danger');
       setNombres('');
+      setIdTrabajador(null);
+      setIdCliente(null);
+      setFormDisabled(true);
     }
   };
 
-  const handleShowPedidosModal = () => setShowPedidosModal(true);
-  const handleClosePedidosModal = () => setShowPedidosModal(false);
-
-  // Funciones para manejar estado del modal de reemplazo
-  const handleShowReplaceConfirmationModal = () => setShowReplaceConfirmationModal(true);
-  const handleCloseReplaceConfirmationModal = () => setShowReplaceConfirmationModal(false);
-
-  const handlePedidoRecibido = (id: string) => {
-    console.log(`Pedido ${id} marcado como Recibido`);
-    setHistorialPedidos(prevPedidos =>
-      prevPedidos.map(pedido =>
-        pedido.id === id
-          ? { ...pedido, estadoPedido: 'Entregado' } as Pedido // <--- CAMBIO AQUÍ: Casting explícito
-          : pedido
-      )
-    );
-    alert(`Pedido ${id} marcado como Recibido.`);
-  };
-
-  const handlePedidoCancelar = (id: string) => {
-    console.log(`Pedido ${id} marcado como Anulado`);
-    setHistorialPedidos(prevPedidos =>
-      prevPedidos.map(pedido =>
-        pedido.id === id
-          ? { ...pedido, estadoPedido: 'Anulado', estadoRegistro: 'Eliminado' } as Pedido // <--- CAMBIO AQUÍ: Casting explícito
-          : pedido
-      )
-    );
-    alert(`Pedido ${id} Cancelado.`);
-  };
-
-  const handleConfirmReplace = () => {
-    console.log("Confirmado el reemplazo de pedidos. Se eliminan los anteriores y se registran los nuevos.");
-    // Aquí iría la lógica para "eliminar" los pedidos existentes y luego registrar los nuevos.
-    // Por ahora, simularemos la anulación de los pedidos en conflicto y la adición de los nuevos.
-
-    const datesToRegister = newOrderDatesToConfirm.map(parseDateYYYYMMDD);
-    const initialFechaHoraRegistro = new Date().toISOString();
-
-    const newDailyPedidos: Pedido[] = datesToRegister.map(date => {
-      return {
-        id: `${dni}-${formatDateToYYYYMMDD(date)}-${Date.now()}`, // ID único para cada pedido diario
-        dni,
-        nombres,
-        fechaServicio: formatDateToYYYYMMDD(date),
-        desayuno: desayunoOpcion && desayunoLugar ? { tipoId: opcionesComida.find(o => o.nombre === desayunoOpcion)?.id || 0, tipoNombre: desayunoOpcion, lugarEntregaId: lugaresEntrega.find(l => l.nombre === desayunoLugar)?.id || 0, lugarEntregaNombre: desayunoLugar } as ComidaSeleccionada : undefined,
-        almuerzo: almuerzoOpcion && almuerzoLugar ? { tipoId: opcionesComida.find(o => o.nombre === almuerzoOpcion)?.id || 0, tipoNombre: almuerzoOpcion, lugarEntregaId: lugaresEntrega.find(l => l.nombre === almuerzoLugar)?.id || 0, lugarEntregaNombre: almuerzoLugar } as ComidaSeleccionada : undefined,
-        cena: cenaOpcion && cenaLugar ? { tipoId: opcionesComida.find(o => o.nombre === cenaOpcion)?.id || 0, tipoNombre: cenaOpcion, lugarEntregaId: lugaresEntrega.find(l => l.nombre === cenaLugar)?.id || 0, lugarEntregaNombre: cenaLugar } as ComidaSeleccionada : undefined,
-        fechaHoraRegistro: initialFechaHoraRegistro,
-        estadoPedido: 'Pendiente', // 'Pendiente' es literal, pero el casting general ayuda
-        estadoRegistro: 'Activo',  // 'Activo' es literal, pero el casting general ayuda
-      } as Pedido; // <--- Se mantiene este casting para asegurar el tipo completo del nuevo pedido
-    });
-
-    setHistorialPedidos(prevPedidos => {
-      // Anular los pedidos en conflicto (marcarlos como Anulado/Eliminado)
-      const updatedPedidos = prevPedidos.map(pedido => {
-        if (conflictingPedidosSummary.some(conflict => conflict.id === pedido.id)) {
-          return { ...pedido, estadoPedido: 'Anulado', estadoRegistro: 'Eliminado' } as Pedido; // <--- CAMBIO AQUÍ: Casting explícito
-        }
-        return pedido;
-      });
-      // Añadir los nuevos pedidos diarios
-      return [...updatedPedidos, ...newDailyPedidos];
-    });
-
-    handleCloseReplaceConfirmationModal();
-    alert('Pedidos reemplazados y registrados con éxito!');
-  };
-
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-
-    // Validaciones de fechas (ahora con el nuevo formato y utilidades)
+  // Validaciones del formulario
+  const validateForm = useCallback(() => {
     if (!fechaIngreso || !fechaSalida) {
-        alert("Las fechas de ingreso y salida no pueden estar vacías.");
-        return;
+      displayAlert('Por favor, ingrese tanto la fecha de ingreso como la de salida.', 'danger');
+      return false;
     }
-
+    if (fechaIngreso > fechaSalida) {
+      displayAlert('La fecha de salida no puede ser anterior a la fecha de ingreso.', 'danger');
+      return false;
+    }
     const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const ingresoDate = parseDateYYYYMMDD(fechaIngreso);
-    const salidaDate = parseDateYYYYMMDD(fechaSalida);
-
-
-    if (ingresoDate < today) {
-        alert("La fecha de ingreso debe ser desde hoy en adelante.");
-        return;
+    today.setHours(0, 0, 0, 0); // Normalizar a inicio del día
+    if (fechaIngreso < today) {
+        displayAlert('La fecha de ingreso no puede ser anterior al día de hoy.', 'danger');
+        return false;
     }
 
-    if (salidaDate < today) {
-        alert("La fecha de salida debe ser desde hoy en adelante.");
-        return;
+
+    const hasSelectedMeal = desayunoSeleccionado || almuerzoSeleccionado || cenaSeleccionada;
+    if (!hasSelectedMeal) {
+      displayAlert('Debe seleccionar al menos una comida (desayuno, almuerzo o cena).', 'danger');
+      return false;
     }
 
-    if (ingresoDate > salidaDate) {
-        alert("La fecha de salida no puede ser anterior a la fecha de ingreso.");
-        return;
+    if (desayunoSeleccionado && !lugarEntregaDesayuno) {
+      displayAlert('Por favor, seleccione un lugar de entrega para el desayuno.', 'danger');
+      return false;
+    }
+    if (almuerzoSeleccionado && !lugarEntregaAlmuerzo) {
+      displayAlert('Por favor, seleccione un lugar de entrega para el almuerzo.', 'danger');
+      return false;
+    }
+    if (cenaSeleccionada && !lugarEntregaCena) {
+      displayAlert('Por favor, seleccione un lugar de entrega para la cena.', 'danger');
+      return false;
     }
 
-    // Generar las fechas diarias del nuevo pedido
-    const datesToRegister = getDatesInRange(ingresoDate, salidaDate).map(formatDateToYYYYMMDD);
+    return true;
+  }, [
+    fechaIngreso,
+    fechaSalida,
+    desayunoSeleccionado,
+    almuerzoSeleccionado,
+    cenaSeleccionada,
+    lugarEntregaDesayuno,
+    lugarEntregaAlmuerzo,
+    lugarEntregaCena,
+    displayAlert,
+  ]);
 
-    // Validación de conflictos (con la nueva lógica de pedidos diarios)
-    const conflictingPedidos: Pedido[] = [];
-    datesToRegister.forEach(newDateStr => {
-      const newDate = parseDateYYYYMMDD(newDateStr);
-      historialPedidos.forEach(existingPedido => {
-        if (existingPedido.dni === dni && existingPedido.estadoRegistro === 'Activo') {
-          const existingDate = parseDateYYYYMMDD(existingPedido.fechaServicio);
-          // Verificar si la fecha del nuevo pedido es la misma que la de un pedido existente activo
-          if (newDate.getTime() === existingDate.getTime()) {
-            conflictingPedidos.push(existingPedido);
+  // Construir el objeto de solicitud para el backend
+  const buildOrderRequest = useCallback((): RegisterOrderRequest => {
+    return {
+      IdTrabajador: idTrabajador!,
+      IdCliente: idCliente!,
+      FechaIngreso: fechaIngreso ? format(fechaIngreso, 'yyyy-MM-dd') : '',
+      FechaSalida: fechaSalida ? format(fechaSalida, 'yyyy-MM-dd') : '',
+      IdProductoDesayuno: desayunoSeleccionado ? desayunoSeleccionado : undefined,
+      IdProductoAlmuerzo: almuerzoSeleccionado ? almuerzoSeleccionado : undefined,
+      IdProductoCena: cenaSeleccionada ? cenaSeleccionada : undefined,
+      IdLugarEntregaDesayuno: desayunoSeleccionado && lugarEntregaDesayuno ? lugarEntregaDesayuno : undefined,
+      IdLugarEntregaAlmuerzo: almuerzoSeleccionado && lugarEntregaAlmuerzo ? lugarEntregaAlmuerzo : undefined,
+      IdLugarEntregaCena: cenaSeleccionada && lugarEntregaCena ? lugarEntregaCena : undefined,
+    };
+  }, [
+    idTrabajador,
+    idCliente,
+    fechaIngreso,
+    fechaSalida,
+    desayunoSeleccionado,
+    almuerzoSeleccionado,
+    cenaSeleccionada,
+    lugarEntregaDesayuno,
+    lugarEntregaAlmuerzo,
+    lugarEntregaCena,
+  ]);
+
+  // Manejar el envío del formulario (POST)
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setIsFormSubmitted(true); // Indicar que el formulario ha sido enviado
+    if (!validateForm()) {
+      return;
+    }
+    if (idTrabajador === null || idCliente === null) {
+      displayAlert('Error: DNI del trabajador o cliente no validado.', 'danger');
+      return;
+    }
+
+    const orderRequest = buildOrderRequest();
+
+    try {
+      const response = await registerOrder(orderRequest);
+
+      if (response && 'conflictos' in response) {
+        // Es una respuesta de conflicto
+        const conflictSummaries: ConflictingPedidoSummary[] = response.conflictos.map(
+          (conflict) => {
+            let comidas = [];
+            if (conflict.productos.desayuno) comidas.push(`Desayuno: ${conflict.productos.desayuno.nombre}`);
+            if (conflict.productos.almuerzo) comidas.push(`Almuerzo: ${conflict.productos.almuerzo.nombre}`);
+            if (conflict.productos.cena) comidas.push(`Cena: ${conflict.productos.cena.nombre}`);
+
+            return {
+              id: uuidv4(), // Generar un ID local para el resumen de conflicto
+              fechaServicio: conflict.fecha,
+              comidas: comidas.join(', ') || 'No especificado',
+              estadoPedido: 'Pendiente', // Asumimos que los conflictos son de pedidos pendientes, o el backend debería especificarlo
+            };
           }
+        );
+        setConflictingPedidosSummary(conflictSummaries);
+        const newDates = [];
+        if (fechaIngreso && fechaSalida) {
+            let currentDate = new Date(fechaIngreso);
+            while (currentDate <= fechaSalida) {
+                newDates.push(format(currentDate, 'yyyy-MM-dd'));
+                currentDate = addDays(currentDate, 1);
+            }
         }
-      });
-    });
+        setNewOrderDatesForConflict(newDates);
+        setShowReplaceModal(true);
+      } else {
+        // Registro exitoso
+        displayAlert('Pedido registrado con éxito.', 'success');
+        resetForm();
+        loadHistorialPedidos(); // Recargar historial después del registro
+      }
+    } catch (error) {
+      console.error('Error al registrar el pedido:', error);
+      displayAlert(`Error al registrar el pedido: ${error instanceof Error ? error.message : String(error)}`, 'danger');
+    }
+  };
 
-    if (conflictingPedidos.length > 0) {
-        // Preparar resumen para el modal de advertencia
-        const summary: ConflictingPedidoSummary[] = conflictingPedidos.map(p => ({
-            id: p.id,
-            fechaServicio: p.fechaServicio,
-            comidas: `${p.desayuno?.tipoNombre ? 'Desayuno: ' + p.desayuno.tipoNombre : ''}${p.almuerzo?.tipoNombre ? (p.desayuno ? ', ' : '') + 'Almuerzo: ' + p.almuerzo.tipoNombre : ''}${p.cena?.tipoNombre ? (p.desayuno || p.almuerzo ? ', ' : '') + 'Cena: ' + p.cena.tipoNombre : ''}` || 'Sin comidas',
-            estadoPedido: p.estadoPedido,
-        }));
-        setConflictingPedidosSummary(summary);
-        setNewOrderDatesToConfirm(datesToRegister); // Guardar las fechas del nuevo pedido
-        handleShowReplaceConfirmationModal(); // Mostrar el modal de confirmación
+  // Manejar la confirmación de reemplazo (PATCH)
+  const handleConfirmReplace = async () => {
+    setShowReplaceModal(false); // Cerrar el modal
+    if (idTrabajador === null || idCliente === null) {
+        displayAlert('Error: DNI del trabajador o cliente no validado para el reemplazo.', 'danger');
         return;
     }
 
-    // Si no hay conflictos, proceder con el registro normal
-    const initialFechaHoraRegistro = new Date().toISOString();
-    const newDailyPedidos: Pedido[] = datesToRegister.map(dateStr => {
-        return {
-            id: `${dni}-${dateStr}-${Date.now()}`, // ID único para cada pedido diario
-            dni,
-            nombres,
-            fechaServicio: dateStr,
-            desayuno: desayunoOpcion && desayunoLugar ? { tipoId: opcionesComida.find(o => o.nombre === desayunoOpcion)?.id || 0, tipoNombre: desayunoOpcion, lugarEntregaId: lugaresEntrega.find(l => l.nombre === desayunoLugar)?.id || 0, lugarEntregaNombre: desayunoLugar } : undefined,
-            almuerzo: almuerzoOpcion && almuerzoLugar ? { tipoId: opcionesComida.find(o => o.nombre === almuerzoOpcion)?.id || 0, tipoNombre: almuerzoOpcion, lugarEntregaId: lugaresEntrega.find(l => l.nombre === almuerzoLugar)?.id || 0, lugarEntregaNombre: almuerzoLugar } : undefined,
-            cena: cenaOpcion && cenaLugar ? { tipoId: opcionesComida.find(o => o.nombre === cenaOpcion)?.id || 0, tipoNombre: cenaOpcion, lugarEntregaId: lugaresEntrega.find(l => l.nombre === cenaLugar)?.id || 0, lugarEntregaNombre: cenaLugar } : undefined,
-            fechaHoraRegistro: initialFechaHoraRegistro,
-            estadoPedido: 'Pendiente',
-            estadoRegistro: 'Activo',
-        } as Pedido;
-    });
+    const orderRequest = buildOrderRequest();
 
-    setHistorialPedidos(prevPedidos => [...prevPedidos, ...newDailyPedidos]);
-    console.log("Pedidos registrados:", newDailyPedidos);
-    alert('Pedido registrado con éxito!');
+    try {
+      await patchOrderReplacement(idTrabajador, orderRequest); // idTrabajador como parámetro para el PATCH
+      displayAlert('Pedidos reemplazados con éxito.', 'success');
+      resetForm();
+      loadHistorialPedidos(); // Recargar historial después del reemplazo
+    } catch (error) {
+      console.error('Error al reemplazar pedidos:', error);
+      displayAlert(`Error al reemplazar pedidos: ${error instanceof Error ? error.message : String(error)}`, 'danger');
+    }
+  };
 
-    // Limpiar el formulario después de enviar (opcional)
-    // setFechaIngreso('');
-    // setFechaSalida('');
-    // setDesayunoOpcion('');
-    // setDesayunoLugar('');
-    // setAlmuerzoOpcion('');
-    // setAlmuerzoLugar('');
-    // setCenaOpcion('');
-    // setCenaLugar('');
+  // Manejar cambio de estado a "Anulado" para un pedido
+  const handlePedidoAnular = async (pedidoId: string) => {
+    const confirmAnular = window.confirm('¿Está seguro de que desea anular este pedido?');
+    if (!confirmAnular) {
+      return;
+    }
+    try {
+      // El backend indicó que 2 significa "Anulado"
+      await updateOrderStatus(parseInt(pedidoId), 2);
+      displayAlert('Pedido anulado con éxito.', 'success');
+      loadHistorialPedidos(); // Recargar historial después de anular
+    } catch (error) {
+      console.error('Error al anular pedido:', error);
+      displayAlert(`Error al anular pedido: ${error instanceof Error ? error.message : String(error)}`, 'danger');
+    }
+  };
+
+  // Manejar cambio de estado a "Entregado" para un pedido (mapeado a Anulado según la indicación del backend)
+  const handlePedidoRecibido = async (pedidoId: string) => {
+    const confirmRecibido = window.confirm('¿Está seguro de que desea marcar este pedido como entregado?');
+    if (!confirmRecibido) {
+      return;
+    }
+    try {
+      // Según la indicación del backend, "Entregado" y "Cancelar" significan "Anulado" (estado 2)
+      await updateOrderStatus(parseInt(pedidoId), 2);
+      displayAlert('Pedido marcado como entregado (anulado en el sistema).', 'success');
+      loadHistorialPedidos(); // Recargar historial después de marcar como entregado
+    } catch (error) {
+      console.error('Error al marcar pedido como entregado:', error);
+      displayAlert(`Error al marcar pedido como entregado: ${error instanceof Error ? error.message : String(error)}`, 'danger');
+    }
+  };
+
+
+  // Función para resetear el formulario
+  const resetForm = () => {
+    setFechaIngreso(null);
+    setFechaSalida(null);
+    setDesayunoSeleccionado('');
+    setAlmuerzoSeleccionado('');
+    setCenaSeleccionada('');
+    setLugarEntregaDesayuno('');
+    setLugarEntregaAlmuerzo('');
+    setLugarEntregaCena('');
+    setIsFormSubmitted(false); // Resetear estado de envío del formulario
+  };
+
+  // Función para formatear fechas para mostrar en la interfaz de usuario
+  const formatDateForDisplay = (dateString: string) => {
+    if (!dateString) return 'N/A';
+    try {
+      const date = parseISO(dateString);
+      return isValid(date) ? format(date, 'dd/MM/yyyy', { locale: es }) : 'Fecha inválida';
+    } catch (e) {
+      console.error('Error parsing date:', e);
+      return 'Fecha inválida';
+    }
+  };
+
+  const getMealDisplayName = (mealTypeId: number | undefined) => {
+    if (!mealTypeId) return 'Ninguno';
+    const meal = tiposComida.find(t => t.id === mealTypeId);
+    return meal ? meal.nombre : 'Desconocido';
+  };
+
+  const getLocationDisplayName = (locationId: number | undefined) => {
+    if (!locationId) return 'Ninguno';
+    const location = lugaresEntrega.find(l => l.id === locationId);
+    return location ? location.nombre : 'Desconocido';
   };
 
   return (
-    <div className="container py-5">
-      <div className="row justify-content-center">
-        <div className="col-lg-8">
-          <div className="card p-4">
-            <h1 className="text-center mb-4">Mi pedido</h1>
-            <form onSubmit={handleSubmit}>
-              <div className="row g-3">
-                <div className="col-md-4">
-                  <label htmlFor="dni" className="form-label">DNI</label>
-                  <div className="input-group">
-                    <input
-                      type="text"
-                      id="dni"
-                      className={`form-control ${dniError ? 'is-invalid' : ''}`}
-                      placeholder="Ingresa DNI"
-                      value={dni}
-                      onChange={handleDniChange}
-                      required
-                      maxLength={8}
-                    />
-                    <button
-                      type="button"
-                      className="btn btn-outline-secondary"
-                      onClick={handleValidateDni}
-                    >
-                      Buscar
-                    </button>
-                    {dniError && <div className="invalid-feedback">{dniError}</div>}
-                  </div>
-                </div>
-                <div className="col-md-8">
-                  <label htmlFor="nombres" className="form-label">Nombres</label>
-                  <input
-                    type="text"
-                    id="nombres"
-                    className="form-control"
-                    placeholder="Nombre completo"
-                    value={nombres}
-                    readOnly
-                    disabled={!dniValidated}
-                  />
-                </div>
+    <Container className="my-4">
+      <h1 className="mb-4 text-center">Registro de Pedido de Comidas</h1>
 
-                {/* Botón para ver historial de pedidos, solo visible si el DNI es válido */}
-                {dniValidated && (
-                  <div className="col-12 text-end">
-                    <button
-                      type="button"
-                      className="btn btn-info btn-sm"
-                      onClick={handleShowPedidosModal}
-                    >
-                      Ver Mis Pedidos
-                    </button>
-                  </div>
+      {showAlert && (
+        <Alert variant={alertVariant} onClose={() => setShowAlert(false)} dismissible>
+          {alertMessage}
+        </Alert>
+      )}
+
+      <Form onSubmit={(e) => e.preventDefault()}>
+        <Row className="mb-3 align-items-end">
+          <Col md={4}>
+            <Form.Group controlId="formDni">
+              <Form.Label>DNI Empleado</Form.Label>
+              <Form.Control
+                type="text"
+                placeholder="Ingrese DNI"
+                value={dni}
+                onChange={(e) => setDni(e.target.value)}
+                maxLength={8}
+              />
+            </Form.Group>
+          </Col>
+          <Col md={3}>
+            <Button variant="primary" onClick={handleDniValidation}>
+              Validar DNI
+            </Button>
+          </Col>
+          <Col md={5}>
+            <Form.Group controlId="formNombres">
+              <Form.Label>Nombres del Empleado</Form.Label>
+              <Form.Control type="text" value={nombres} readOnly disabled />
+            </Form.Group>
+          </Col>
+        </Row>
+        <hr />
+
+        <fieldset disabled={formDisabled}>
+          <Row className="mb-3">
+            <Col md={6}>
+              <Form.Group controlId="formFechaIngreso">
+                <Form.Label>Fecha de Ingreso</Form.Label>
+                <DatePicker
+                  selected={fechaIngreso}
+                  onChange={(date: Date | null) => setFechaIngreso(date)}
+                  dateFormat="dd/MM/yyyy"
+                  locale={es}
+                  className={`form-control ${isFormSubmitted && !fechaIngreso ? 'is-invalid' : ''}`}
+                  placeholderText="Seleccione fecha"
+                  minDate={new Date()} // Fecha de ingreso debe ser desde hoy en adelante
+                />
+                {isFormSubmitted && !fechaIngreso && (
+                  <div className="invalid-feedback">Ingrese su fecha de ingreso.</div>
                 )}
-
-                {/* Resto del formulario se muestra solo si el DNI es válido */}
-                {dniValidated && (
-                  <>
-                    <div className="col-md-4">
-                      <label htmlFor="fechaIngreso" className="form-label">Fecha de Ingreso Laboral</label>
-                      <input
-                        type="date"
-                        id="fechaIngreso"
-                        className="form-control"
-                        value={fechaIngreso}
-                        onChange={(e) => setFechaIngreso(e.target.value)}
-                        required
-                      />
-                    </div>
-                    <div className="col-md-4">
-                      <label htmlFor="fechaSalida" className="form-label">Fecha de Salida Laboral</label>
-                      <input
-                        type="date"
-                        id="fechaSalida"
-                        className="form-control"
-                        value={fechaSalida}
-                        onChange={(e) => setFechaSalida(e.target.value)}
-                        required
-                      />
-                    </div>
-                    <div className="col-md-4">
-                      <label htmlFor="fechaRegistro" className="form-label">Fecha de Registro</label>
-                      <input
-                        type="text"
-                        id="fechaRegistro"
-                        className="form-control"
-                        value={new Date().toLocaleDateString()}
-                        readOnly
-                        disabled
-                      />
-                    </div>
-
-                    {/* Desayuno */}
-                    <h2 className="mt-4">¿Qué desayuno desea?</h2>
-                    <div className="col-md-6">
-                      <label htmlFor="opciones_desayuno" className="form-label">Quiero</label>
-                      <select
-                        id="opciones_desayuno"
-                        className="form-select"
-                        value={desayunoOpcion}
-                        onChange={(e) => setDesayunoOpcion(e.target.value)}
-                        required={false}
-                      >
-                        <option value="" disabled>Selecciona una opción</option>
-                        {opcionesComida.map(opcion => (
-                          <option key={opcion.id} value={opcion.nombre}>{opcion.nombre}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="col-md-6">
-                      <label htmlFor="lugares_entrega_D" className="form-label">Llévalo a</label>
-                      <select
-                        id="lugares_entrega_D"
-                        className="form-select"
-                        value={desayunoLugar}
-                        onChange={(e) => setDesayunoLugar(e.target.value)}
-                        required={false}
-                      >
-                        <option value="" disabled>Selecciona un lugar</option>
-                        {lugaresEntrega.map(lugar => (
-                          <option key={lugar.id} value={lugar.nombre}>{lugar.nombre}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {/* Almuerzo */}
-                    <h2 className="mt-4">¿Qué almuerzo desea?</h2>
-                    <div className="col-md-6">
-                      <label htmlFor="opciones_almuerzo" className="form-label">Quiero</label>
-                      <select
-                        id="opciones_almuerzo"
-                        className="form-select"
-                        value={almuerzoOpcion}
-                        onChange={(e) => setAlmuerzoOpcion(e.target.value)}
-                        required={false}
-                      >
-                        <option value="" disabled>Selecciona una opción</option>
-                        {opcionesComida.map(opcion => (
-                          <option key={opcion.id} value={opcion.nombre}>{opcion.nombre}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="col-md-6">
-                      <label htmlFor="lugares_entrega_A" className="form-label">Llévalo a</label>
-                      <select
-                        id="lugares_entrega_A"
-                        className="form-select"
-                        value={almuerzoLugar}
-                        onChange={(e) => setAlmuerzoLugar(e.target.value)}
-                        required={false}
-                      >
-                        <option value="" disabled>Selecciona un lugar</option>
-                        {lugaresEntrega.map(lugar => (
-                          <option key={lugar.id} value={lugar.nombre}>{lugar.nombre}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {/* Cena */}
-                    <h2 className="mt-4">¿Qué cena desea?</h2>
-                    <div className="col-md-6">
-                      <label htmlFor="opciones_cena" className="form-label">Quiero</label>
-                      <select
-                        id="opciones_cena"
-                        className="form-select"
-                        value={cenaOpcion}
-                        onChange={(e) => setCenaOpcion(e.target.value)}
-                        required={false}
-                      >
-                        <option value="" disabled>Selecciona una opción</option>
-                        {opcionesComida.map(opcion => (
-                          <option key={opcion.id} value={opcion.nombre}>{opcion.nombre}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="col-md-6">
-                      <label htmlFor="lugares_entrega_C" className="form-label">Llévalo a</label>
-                      <select
-                        id="lugares_entrega_C"
-                        className="form-select"
-                        value={cenaLugar}
-                        onChange={(e) => setCenaLugar(e.target.value)}
-                        required={false}
-                      >
-                        <option value="" disabled>Selecciona un lugar</option>
-                        {lugaresEntrega.map(lugar => (
-                          <option key={lugar.id} value={lugar.nombre}>{lugar.nombre}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div className="col-12 text-center mt-4">
-                      <button type="submit" className="btn btn-primary px-5">Reservar</button>
-                    </div>
-                  </>
+              </Form.Group>
+            </Col>
+            <Col md={6}>
+              <Form.Group controlId="formFechaSalida">
+                <Form.Label>Fecha de Salida</Form.Label>
+                <DatePicker
+                  selected={fechaSalida}
+                  onChange={(date: Date | null) => setFechaSalida(date)}
+                  dateFormat="dd/MM/yyyy"
+                  locale={es}
+                  className={`form-control ${isFormSubmitted && !fechaSalida ? 'is-invalid' : ''}`}
+                  placeholderText="Seleccione fecha"
+                  minDate={fechaIngreso || new Date()} // Fecha de salida debe ser igual o posterior a la de ingreso
+                />
+                {isFormSubmitted && !fechaSalida && (
+                  <div className="invalid-feedback">Ingrese su fecha de salida.</div>
                 )}
-              </div>
-            </form>
-          </div>
-        </div>
-      </div>
+                 {isFormSubmitted && fechaIngreso && fechaSalida && fechaSalida < fechaIngreso && (
+                  <div className="invalid-feedback">La fecha de salida no puede ser anterior a la fecha de ingreso.</div>
+                )}
+              </Form.Group>
+            </Col>
+          </Row>
 
-      {/* Renderizar el modal */}
-      <PedidosModal
-        show={showPedidosModal}
-        onHide={handleClosePedidosModal}
-        pedidos={historialPedidos}
-        onPedidoRecibido={handlePedidoRecibido}
-        onPedidoCancelar={handlePedidoCancelar}
-      />
-      {/* El nuevo modal de confirmación de reemplazo se renderizará aquí */}
+          <h4 className="mt-4 mb-3">Selección de Comidas y Lugares de Entrega</h4>
+
+          {/* Desayuno */}
+          <Row className="mb-3 align-items-center">
+            <Col md={4}>
+              <Form.Group controlId="formDesayuno">
+                <Form.Label>Desayuno</Form.Label>
+                <Form.Select
+                  value={desayunoSeleccionado}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setDesayunoSeleccionado(value === '' ? '' : parseInt(value));
+                    if (value === '') setLugarEntregaDesayuno(''); // Limpiar lugar si no hay desayuno
+                  }}
+                  className={isFormSubmitted && desayunoSeleccionado && !lugarEntregaDesayuno ? 'is-invalid' : ''}
+                >
+                  <option value="">No seleccionar</option>
+                  {tiposComida.map((comida) => (
+                    <option key={comida.id} value={comida.id}>
+                      {comida.nombre}
+                    </option>
+                  ))}
+                </Form.Select>
+              </Form.Group>
+            </Col>
+            <Col md={4}>
+              <Form.Group controlId="formLugarDesayuno">
+                <Form.Label>Lugar de Entrega Desayuno</Form.Label>
+                <Form.Select
+                  value={lugarEntregaDesayuno}
+                  onChange={(e) => setLugarEntregaDesayuno(parseInt(e.target.value))}
+                  disabled={!desayunoSeleccionado}
+                  className={isFormSubmitted && desayunoSeleccionado && !lugarEntregaDesayuno ? 'is-invalid' : ''}
+                >
+                  <option value="">Seleccione lugar</option>
+                  {lugaresEntrega.map((lugar) => (
+                    <option key={lugar.id} value={lugar.id}>
+                      {lugar.nombre}
+                    </option>
+                  ))}
+                </Form.Select>
+                {isFormSubmitted && desayunoSeleccionado && !lugarEntregaDesayuno && (
+                  <div className="invalid-feedback">Debe seleccionar un lugar para el desayuno.</div>
+                )}
+              </Form.Group>
+            </Col>
+          </Row>
+
+          {/* Almuerzo */}
+          <Row className="mb-3 align-items-center">
+            <Col md={4}>
+              <Form.Group controlId="formAlmuerzo">
+                <Form.Label>Almuerzo</Form.Label>
+                <Form.Select
+                  value={almuerzoSeleccionado}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setAlmuerzoSeleccionado(value === '' ? '' : parseInt(value));
+                    if (value === '') setLugarEntregaAlmuerzo('');
+                  }}
+                  className={isFormSubmitted && almuerzoSeleccionado && !lugarEntregaAlmuerzo ? 'is-invalid' : ''}
+                >
+                  <option value="">No seleccionar</option>
+                  {tiposComida.map((comida) => (
+                    <option key={comida.id} value={comida.id}>
+                      {comida.nombre}
+                    </option>
+                  ))}
+                </Form.Select>
+              </Form.Group>
+            </Col>
+            <Col md={4}>
+              <Form.Group controlId="formLugarAlmuerzo">
+                <Form.Label>Lugar de Entrega Almuerzo</Form.Label>
+                <Form.Select
+                  value={lugarEntregaAlmuerzo}
+                  onChange={(e) => setLugarEntregaAlmuerzo(parseInt(e.target.value))}
+                  disabled={!almuerzoSeleccionado}
+                  className={isFormSubmitted && almuerzoSeleccionado && !lugarEntregaAlmuerzo ? 'is-invalid' : ''}
+                >
+                  <option value="">Seleccione lugar</option>
+                  {lugaresEntrega.map((lugar) => (
+                    <option key={lugar.id} value={lugar.id}>
+                      {lugar.nombre}
+                    </option>
+                  ))}
+                </Form.Select>
+                {isFormSubmitted && almuerzoSeleccionado && !lugarEntregaAlmuerzo && (
+                  <div className="invalid-feedback">Debe seleccionar un lugar para el almuerzo.</div>
+                )}
+              </Form.Group>
+            </Col>
+          </Row>
+
+          {/* Cena */}
+          <Row className="mb-3 align-items-center">
+            <Col md={4}>
+              <Form.Group controlId="formCena">
+                <Form.Label>Cena</Form.Label>
+                <Form.Select
+                  value={cenaSeleccionada}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setCenaSeleccionada(value === '' ? '' : parseInt(value));
+                    if (value === '') setLugarEntregaCena('');
+                  }}
+                  className={isFormSubmitted && cenaSeleccionada && !lugarEntregaCena ? 'is-invalid' : ''}
+                >
+                  <option value="">No seleccionar</option>
+                  {tiposComida.map((comida) => (
+                    <option key={comida.id} value={comida.id}>
+                      {comida.nombre}
+                    </option>
+                  ))}
+                </Form.Select>
+              </Form.Group>
+            </Col>
+            <Col md={4}>
+              <Form.Group controlId="formLugarCena">
+                <Form.Label>Lugar de Entrega Cena</Form.Label>
+                <Form.Select
+                  value={lugarEntregaCena}
+                  onChange={(e) => setLugarEntregaCena(parseInt(e.target.value))}
+                  disabled={!cenaSeleccionada}
+                  className={isFormSubmitted && cenaSeleccionada && !lugarEntregaCena ? 'is-invalid' : ''}
+                >
+                  <option value="">Seleccione lugar</option>
+                  {lugaresEntrega.map((lugar) => (
+                    <option key={lugar.id} value={lugar.id}>
+                      {lugar.nombre}
+                    </option>
+                  ))}
+                </Form.Select>
+                {isFormSubmitted && cenaSeleccionada && !lugarEntregaCena && (
+                  <div className="invalid-feedback">Debe seleccionar un lugar para la cena.</div>
+                )}
+              </Form.Group>
+            </Col>
+          </Row>
+
+          <Button variant="success" type="submit" onClick={handleSubmit} className="mt-4">
+            Registrar Pedido
+          </Button>
+        </fieldset>
+      </Form>
+
+      {/* Historial de Pedidos */}
+      <h2 className="mt-5 mb-3 text-center">Historial de Pedidos de {nombres}</h2>
+      {historialPedidos.length === 0 ? (
+        <Alert variant="info" className="text-center">
+          No hay pedidos registrados para este empleado.
+        </Alert>
+      ) : (
+        <ListGroup className="mt-3">
+          {historialPedidos.map((pedido) => (
+            <ListGroup.Item key={pedido.id} className="mb-2">
+              <Row className="align-items-center">
+                <Col md={3}>
+                  <strong>Fecha:</strong> {formatDateForDisplay(pedido.fechaServicio)}
+                </Col>
+                <Col md={4}>
+                  <div>
+                    <strong>Desayuno:</strong>{' '}
+                    {getMealDisplayName(pedido.desayuno?.tipoId)} (
+                    {getLocationDisplayName(pedido.desayuno?.lugarEntregaId)})
+                  </div>
+                  <div>
+                    <strong>Almuerzo:</strong>{' '}
+                    {getMealDisplayName(pedido.almuerzo?.tipoId)} (
+                    {getLocationDisplayName(pedido.almuerzo?.lugarEntregaId)})
+                  </div>
+                  <div>
+                    <strong>Cena:</strong>{' '}
+                    {getMealDisplayName(pedido.cena?.tipoId)} (
+                    {getLocationDisplayName(pedido.cena?.lugarEntregaId)})
+                  </div>
+                </Col>
+                <Col md={3}>
+                  <strong>Estado:</strong> {pedido.estadoPedido}
+                  <br />
+                  <strong>Reg. Activo:</strong> {pedido.estadoRegistro}
+                </Col>
+                <Col md={2} className="d-flex justify-content-end">
+                  {pedido.estadoPedido === 'Pendiente' && pedido.estadoRegistro === 'Activo' && (
+                    <>
+                      <Button
+                        variant="info"
+                        size="sm"
+                        className="me-2"
+                        onClick={() => handlePedidoRecibido(pedido.id)}
+                      >
+                        Entregado
+                      </Button>
+                      <Button
+                        variant="warning"
+                        size="sm"
+                        onClick={() => handlePedidoAnular(pedido.id)}
+                      >
+                        Anular
+                      </Button>
+                    </>
+                  )}
+                </Col>
+              </Row>
+            </ListGroup.Item>
+          ))}
+        </ListGroup>
+      )}
+
+      {/* Modal de Confirmación de Reemplazo */}
       <ReplaceConfirmationModal
-        show={showReplaceConfirmationModal}
-        onHide={handleCloseReplaceConfirmationModal}
+        show={showReplaceModal}
+        onHide={() => setShowReplaceModal(false)}
         onConfirmReplace={handleConfirmReplace}
         conflictingPedidos={conflictingPedidosSummary}
-        newOrderDates={newOrderDatesToConfirm}
+        newOrderDates={newOrderDatesForConflict}
       />
-    </div>
+    </Container>
   );
 };
 
