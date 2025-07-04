@@ -139,13 +139,12 @@ export const getWorkerOrders = async (idTrabajador: number, dni: string, nombres
 
 
 /**
- * Realiza un PATCH para reemplazar pedidos existentes en un rango de fechas.
  * @param idTrabajador El ID del trabajador (asumiendo que es el parámetro idclienteTrabajador en la URL).
  * @param data Los datos del pedido que reemplazarán a los existentes.
  * @returns Promesa que resuelve a void en éxito.
  * @throws Error en caso de fallo en la red o el servidor.
  */
-export const patchOrderReplacement = async (
+export const putOrderReplacement = async (
   idTrabajador: number,
   data: RegisterOrderRequest
 ): Promise<void> => {

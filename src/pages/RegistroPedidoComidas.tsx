@@ -19,7 +19,7 @@ import {
   registerOrder,
   updateOrderStatus,
   getWorkerOrders,
-  patchOrderReplacement,
+  putOrderReplacement,
 } from '../services/orderService';
 import {
   validateDni} from '../services/employeeApi';
@@ -257,7 +257,7 @@ const RegistroPedidoComidas: React.FC = () => {
 
   const handleConfirmReplace = async () => {
     try {
-      await patchOrderReplacement(idTrabajador!, buildOrderRequest());
+      await putOrderReplacement(idTrabajador!, buildOrderRequest());
       displayAlert('Pedidos reemplazados con éxito.', 'success');
       resetForm();
       loadHistorialPedidos();
