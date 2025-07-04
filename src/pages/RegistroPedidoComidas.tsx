@@ -199,13 +199,17 @@ const RegistroPedidoComidas: React.FC = () => {
       const response = await registerOrder(orderRequest);
       if (response && response.conflictos) {
         const resumen = response.conflictos.map((c: any) => ({
-          id: uuidv4(),
-          fechaServicio: c.fecha,
-          comidas: Object.entries(c.productos)
-            .map(([k, v]: any) => `${k}: ${v.nombre}`)
-            .join(', '),
-           estadoPedido: 'Pendiente' as 'Pendiente',
-        }));
+            id: uuidv4(),
+            fechaServicio: c.fecha,
+            comidas: Object.entries(c.productos)
+                .filter(([_, v]: any) => typeof v === 'object' && v !== null && v.nombre) // Filtra solo productos válidos
+                .map(([k, v]: any) => {
+                  const capitalizado = k.charAt(0).toUpperCase() + k.slice(1);
+                  return `${capitalizado}: ${v.nombre}`;
+                })
+                .join(', '),
+            estadoPedido: 'Pendiente' as 'Pendiente',
+          }));
         setConflictingPedidosSummary(resumen);
 
         const fechas: string[] = [];
@@ -227,8 +231,12 @@ const RegistroPedidoComidas: React.FC = () => {
       id: uuidv4(),
       fechaServicio: c.fecha,
       comidas: Object.entries(c.productos)
-        .map(([k, v]: any) => `${k}: ${v.nombre}`)
-        .join(', '),
+          .filter(([_, v]: any) => typeof v === 'object' && v !== null && v.nombre) // Filtra solo productos válidos
+          .map(([k, v]: any) => {
+            const capitalizado = k.charAt(0).toUpperCase() + k.slice(1);
+            return `${capitalizado}: ${v.nombre}`;
+          })
+          .join(', '),
       estadoPedido: 'Pendiente' as 'Pendiente',
     }));
     setConflictingPedidosSummary(resumen);
