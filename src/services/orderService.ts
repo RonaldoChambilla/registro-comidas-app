@@ -53,26 +53,25 @@ const mapComidaDetail = (
  * @returns Promesa que resuelve a void en éxito, o RegisterOrderConflictResponse en caso de conflicto.
  * @throws Error en caso de otros fallos en la red o el servidor.
  */
-export const registerOrder = async (
-  data: RegisterOrderRequest
-): Promise<void | RegisterOrderConflictResponse> => {
-  const response = await fetch(BASE_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(data),
-  });
+export const registerOrder = async (orderData: RegisterOrderRequest) => {
+  try {
+    const response = await fetch(BASE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(orderData),
+    });
 
-  if (response.ok) {
-    return; // Éxito, no devuelve cuerpo en este caso
-  } else if (response.status === 409) { // Código de conflicto
-    const conflictData: RegisterOrderConflictResponse = await response.json();
-    return conflictData;
-  } else {
-    // Manejar otros errores
-    const errorData = await response.json();
-    throw new Error(errorData.message || `Error al registrar pedido: ${response.status}`);
+    const data = await response.json();
+
+    if (!response.ok) {
+      // 👇 Lanzamos el contenido del body para poderlo manejar
+      throw data;
+    }
+
+    return data;
+  } catch (error) {
+    console.error('Error desde registerOrder:', error);
+    throw error;
   }
 };
 
@@ -146,18 +145,52 @@ export const getWorkerOrders = async (idTrabajador: number, dni: string, nombres
  * @returns Promesa que resuelve a void en éxito.
  * @throws Error en caso de fallo en la red o el servidor.
  */
-export const patchOrderReplacement = async (idTrabajador: number, data: RegisterOrderRequest): Promise<void> => {
-    // Asumiendo que 'idclienteTrabajador' en la URL PATCH se refiere al idTrabajador
-    const response = await fetch(`${BASE_URL}/cliente-pedidos/${idTrabajador}`, {
-        method: 'PATCH',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
-    });
+export const patchOrderReplacement = async (
+  idTrabajador: number,
+  data: RegisterOrderRequest
+): Promise<void> => {
+  // Eliminar IdCliente (no es necesario enviarlo en PATCH)
+  const { IdCliente, IdTrabajador, ...rest } = data;
 
-    if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `Error al reemplazar pedidos: ${response.status}`);
+  // Convertir todos los campos Id* en number (para que pase validación @IsInt de NestJS)
+  const normalized = Object.fromEntries(
+    Object.entries(rest).map(([key, value]) => {
+      if (
+        key.startsWith('Id') &&
+        value !== undefined &&
+        value !== null &&
+        !isNaN(Number(value))
+      ) {
+        return [key, Number(value)];
+      }
+      return [key, value];
+    })
+  );
+
+  // Limpiar campos undefined
+  const cleanData = Object.fromEntries(
+    Object.entries(normalized).filter(([_, v]) => v !== undefined)
+  );
+
+  console.log('Reemplazo al backend (PUT):', cleanData);
+
+  const response = await fetch(`${BASE_URL}/cliente-pedidos/${idTrabajador}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(cleanData),
+  });
+
+  const datasa = await response.json();
+
+  if (!response.ok) {
+    if (response.status === 409) {
+      throw datasa; // Conflictos devueltos por el backend
+    } else {
+      throw new Error(datasa.message || 'Error desconocido');
     }
+  }
+
+  return datasa;
 };

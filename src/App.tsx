@@ -1,4 +1,4 @@
-import RegistroPedidoComidas from './pages/RegistroPedidoComidas/RegistroPedidoComidas';
+import RegistroPedidoComidas from './pages/RegistroPedidoComidas';
 import './App.css'; // Mantén si tienes estilos globales en App.css
 
 function App() {
